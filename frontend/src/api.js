@@ -1,10 +1,16 @@
 const API_BASE = window.location.origin;
 
-async function sendMessageStream({ message, history, onDelta, signal }) {
+async function sendMessageStream({ message, history, session_id, onDelta, onDone, signal }) {
+  const token = localStorage.getItem("chatllm_token");
+  const headers = { "Content-Type": "application/json" };
+  if (token) {
+    headers["Authorization"] = `Bearer ${token}`;
+  }
+
   const response = await fetch(`${API_BASE}/api/chat/stream`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ message, history }),
+    headers,
+    body: JSON.stringify({ message, history, session_id }),
     signal,
   });
 
@@ -44,6 +50,10 @@ async function sendMessageStream({ message, history, onDelta, signal }) {
         payload = JSON.parse(payloadText);
       } catch {
         continue;
+      }
+
+      if (payload.done && onDone) {
+        onDone(payload);
       }
 
       if (payload.error) {

@@ -1,4 +1,4 @@
-const { useEffect, useMemo, useRef, useState } = React;
+const { useEffect, useMemo, useRef, useState, useCallback } = React;
 
 function createMessageId() {
   return `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
@@ -7,18 +7,17 @@ function createMessageId() {
 function App() {
   const [token, setToken] = useState(() => localStorage.getItem("chatllm_token") || null);
   const [userEmail, setUserEmail] = useState(() => localStorage.getItem("chatllm_email") || null);
-  const [messages, setMessages] = useState([
-    {
-      id: createMessageId(),
-      role: "assistant",
-      content: "Bem-vindo ao ChatLLM Lab. Como posso ajudar voce hoje?",
-    },
-  ]);
+  const [messages, setMessages] = useState([]);
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const messagesRef = useRef(null);
   const abortControllerRef = useRef(null);
+
+  // Session state
+  const [sessions, setSessions] = useState([]);
+  const [activeSessionId, setActiveSessionId] = useState(null);
+  const [sessionsLoaded, setSessionsLoaded] = useState(false);
 
   const chatHistory = useMemo(
     () => messages.filter((msg) => msg.role === "user" || msg.role === "assistant"),
@@ -36,18 +35,70 @@ function App() {
     };
   }, []);
 
+  // Load sessions on login
+  const loadSessions = useCallback(async () => {
+    try {
+      const data = await window.listSessions();
+      setSessions(data.sessions);
+      setSessionsLoaded(true);
+      // Auto-select the most recent session
+      if (data.sessions.length > 0) {
+        const mostRecent = data.sessions[0];
+        setActiveSessionId(mostRecent.id);
+        loadSessionMessages(mostRecent.id);
+      } else {
+        // Create a first session automatically
+        const newSession = await window.createSession();
+        setSessions((prev) => [newSession, ...prev]);
+        setActiveSessionId(newSession.id);
+      }
+    } catch (err) {
+      console.error("Failed to load sessions:", err);
+      setSessionsLoaded(true);
+    }
+  }, []);
+
+  const loadSessionMessages = useCallback(async (sessionId) => {
+    try {
+      const msgs = await window.getSessionMessages(sessionId);
+      if (msgs.length === 0) {
+        setMessages([
+          {
+            id: createMessageId(),
+            role: "assistant",
+            content: "Bem-vindo ao ChatLLM Lab. Como posso ajudar voce hoje?",
+          },
+        ]);
+      } else {
+        setMessages(
+          msgs.map((m) => ({
+            id: `msg-${m.id}`,
+            role: m.role,
+            content: m.content,
+          }))
+        );
+      }
+    } catch (err) {
+      console.error("Failed to load messages:", err);
+      setMessages([
+        {
+          id: createMessageId(),
+          role: "assistant",
+          content: "Bem-vindo ao ChatLLM Lab. Como posso ajudar voce hoje?",
+        },
+      ]);
+    }
+  }, []);
+
   const handleAuthSuccess = (newToken, email) => {
     localStorage.setItem("chatllm_token", newToken);
     localStorage.setItem("chatllm_email", email);
     setToken(newToken);
     setUserEmail(email);
-    setMessages([
-      {
-        id: createMessageId(),
-        role: "assistant",
-        content: `Bem-vindo ao ChatLLM Lab, ${email}! Como posso ajudar voce hoje?`,
-      },
-    ]);
+    setMessages([]);
+    setSessions([]);
+    setActiveSessionId(null);
+    setSessionsLoaded(false);
   };
 
   const handleLogout = () => {
@@ -55,13 +106,65 @@ function App() {
     localStorage.removeItem("chatllm_email");
     setToken(null);
     setUserEmail(null);
-    setMessages([
-      {
-        id: createMessageId(),
-        role: "assistant",
-        content: "Bem-vindo ao ChatLLM Lab. Como posso ajudar voce hoje?",
-      },
-    ]);
+    setMessages([]);
+    setSessions([]);
+    setActiveSessionId(null);
+    setSessionsLoaded(false);
+  };
+
+  // Load sessions when token becomes available
+  useEffect(() => {
+    if (token && !sessionsLoaded) {
+      loadSessions();
+    }
+  }, [token, sessionsLoaded, loadSessions]);
+
+  const handleNewSession = async () => {
+    try {
+      const newSession = await window.createSession();
+      setSessions((prev) => [newSession, ...prev]);
+      setActiveSessionId(newSession.id);
+      setMessages([
+        {
+          id: createMessageId(),
+          role: "assistant",
+          content: "Bem-vindo ao ChatLLM Lab. Como posso ajudar voce hoje?",
+        },
+      ]);
+    } catch (err) {
+      console.error("Failed to create session:", err);
+    }
+  };
+
+  const handleSelectSession = (sessionId) => {
+    if (sessionId === activeSessionId) return;
+    setActiveSessionId(sessionId);
+    loadSessionMessages(sessionId);
+  };
+
+  const handleDeleteSession = async (sessionId) => {
+    try {
+      await window.deleteSession(sessionId);
+      const updated = sessions.filter((s) => s.id !== sessionId);
+      setSessions(updated);
+      if (sessionId === activeSessionId) {
+        if (updated.length > 0) {
+          setActiveSessionId(updated[0].id);
+          loadSessionMessages(updated[0].id);
+        } else {
+          setActiveSessionId(null);
+          setMessages([
+            {
+              id: createMessageId(),
+              role: "assistant",
+              content: "Bem-vindo ao ChatLLM Lab. Como posso ajudar voce hoje?",
+            },
+          ]);
+        }
+      }
+    } catch (err) {
+      console.error("Failed to delete session:", err);
+    }
   };
 
   const onStop = () => {
@@ -70,7 +173,7 @@ function App() {
     setBusy(false);
   };
 
-  const onSubmit = async (event, inputRef) => {
+  const onSubmit = async (event) => {
     event.preventDefault();
     const cleaned = text.trim();
     if (!cleaned || busy) return;
@@ -90,10 +193,11 @@ function App() {
     abortControllerRef.current = abortController;
 
     try {
-      await sendMessageStream({
+      await window.sendMessageStream({
         message: cleaned,
         history: chatHistory,
         signal: abortController.signal,
+        session_id: activeSessionId,
         onDelta: (delta) => {
           setMessages((prev) =>
             prev.map((msg) =>
@@ -102,6 +206,16 @@ function App() {
                 : msg
             )
           );
+        },
+        onDone: (data) => {
+          // If this was a new session (no activeSessionId), update it
+          if (data.session_id && !activeSessionId) {
+            setActiveSessionId(data.session_id);
+          }
+          // Reload sessions to get updated title
+          window.listSessions().then((result) => {
+            setSessions(result.sessions);
+          }).catch(() => {});
         },
       });
 
@@ -132,6 +246,10 @@ function App() {
           )
         );
       }
+      // Reload sessions to get updated title even on error
+      window.listSessions().then((result) => {
+        setSessions(result.sessions);
+      }).catch(() => {});
     } finally {
       abortControllerRef.current = null;
       setBusy(false);
@@ -144,34 +262,43 @@ function App() {
 
   return (
     <main className="app-shell">
-      <header className="app-header">
-        <div className="brand">ChatLLM Lab</div>
-        <div className="user-info">
-          <span className="user-email">{userEmail}</span>
-          <button className="logout-btn" onClick={handleLogout}>Sair</button>
-        </div>
-      </header>
-
-      <section className="messages" aria-live="polite" ref={messagesRef}>
-        <div className="messages-inner">
-          {messages.map((msg) => (
-            <article key={msg.id} className={`bubble ${msg.role}`}>
-              {React.createElement(window.MessageContent, { content: msg.content })}
-            </article>
-          ))}
-        </div>
-      </section>
-
-      {React.createElement(window.Composer, {
-        text,
-        busy,
-        error,
-        onChangeText: setText,
-        onSubmit,
-        onStop,
+      {React.createElement(window.Sidebar, {
+        sessions,
+        activeSessionId,
+        onSelectSession: handleSelectSession,
+        onNewSession: handleNewSession,
+        onDeleteSession: handleDeleteSession,
       })}
+      <div className="app-main">
+        <header className="app-header">
+          <div className="brand">ChatLLM Lab</div>
+          <div className="user-info">
+            <span className="user-email">{userEmail}</span>
+            <button className="logout-btn" onClick={handleLogout}>Sair</button>
+          </div>
+        </header>
 
-      <div className="warning-banner">Lembre-se, voce precisa focar no experimento!!!</div>
+        <section className="messages" aria-live="polite" ref={messagesRef}>
+          <div className="messages-inner">
+            {messages.map((msg) => (
+              <article key={msg.id} className={`bubble ${msg.role}`}>
+                {React.createElement(window.MessageContent, { content: msg.content })}
+              </article>
+            ))}
+          </div>
+        </section>
+
+        {React.createElement(window.Composer, {
+          text,
+          busy,
+          error,
+          onChangeText: setText,
+          onSubmit,
+          onStop,
+        })}
+
+        <div className="warning-banner">Lembre-se, voce precisa focar no experimento!!!</div>
+      </div>
     </main>
   );
 }
