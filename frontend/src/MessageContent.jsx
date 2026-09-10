@@ -162,3 +162,5 @@ function MessageContent({ content }) {
 
   return <div ref={containerRef} />;
 }
+
+window.MessageContent = MessageContent;

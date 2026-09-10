@@ -52,3 +52,5 @@ function Composer({ text, busy, error, onChangeText, onSubmit, onStop }) {
     </div>
   );
 }
+
+window.Composer = Composer;

@@ -5,6 +5,8 @@ function createMessageId() {
 }
 
 function App() {
+  const [token, setToken] = useState(() => localStorage.getItem("chatllm_token") || null);
+  const [userEmail, setUserEmail] = useState(() => localStorage.getItem("chatllm_email") || null);
   const [messages, setMessages] = useState([
     {
       id: createMessageId(),
@@ -33,6 +35,34 @@ function App() {
       abortControllerRef.current?.abort();
     };
   }, []);
+
+  const handleAuthSuccess = (newToken, email) => {
+    localStorage.setItem("chatllm_token", newToken);
+    localStorage.setItem("chatllm_email", email);
+    setToken(newToken);
+    setUserEmail(email);
+    setMessages([
+      {
+        id: createMessageId(),
+        role: "assistant",
+        content: `Bem-vindo ao ChatLLM Lab, ${email}! Como posso ajudar voce hoje?`,
+      },
+    ]);
+  };
+
+  const handleLogout = () => {
+    localStorage.removeItem("chatllm_token");
+    localStorage.removeItem("chatllm_email");
+    setToken(null);
+    setUserEmail(null);
+    setMessages([
+      {
+        id: createMessageId(),
+        role: "assistant",
+        content: "Bem-vindo ao ChatLLM Lab. Como posso ajudar voce hoje?",
+      },
+    ]);
+  };
 
   const onStop = () => {
     abortControllerRef.current?.abort();
@@ -108,32 +138,40 @@ function App() {
     }
   };
 
+  if (!token) {
+    return React.createElement(window.Auth, { onAuthSuccess: handleAuthSuccess });
+  }
+
   return (
     <main className="app-shell">
       <header className="app-header">
         <div className="brand">ChatLLM Lab</div>
+        <div className="user-info">
+          <span className="user-email">{userEmail}</span>
+          <button className="logout-btn" onClick={handleLogout}>Sair</button>
+        </div>
       </header>
 
       <section className="messages" aria-live="polite" ref={messagesRef}>
         <div className="messages-inner">
           {messages.map((msg) => (
             <article key={msg.id} className={`bubble ${msg.role}`}>
-              <MessageContent content={msg.content} />
+              {React.createElement(window.MessageContent, { content: msg.content })}
             </article>
           ))}
         </div>
       </section>
 
-      <Composer
-        text={text}
-        busy={busy}
-        error={error}
-        onChangeText={setText}
-        onSubmit={onSubmit}
-        onStop={onStop}
-      />
+      {React.createElement(window.Composer, {
+        text,
+        busy,
+        error,
+        onChangeText: setText,
+        onSubmit,
+        onStop,
+      })}
 
-      <div className="warning-banner">Lembre-se, você precisa focar no experimento!!!</div>
+      <div className="warning-banner">Lembre-se, voce precisa focar no experimento!!!</div>
     </main>
   );
 }

@@ -56,3 +56,5 @@ async function sendMessageStream({ message, history, onDelta, signal }) {
     }
   }
 }
+
+window.sendMessageStream = sendMessageStream;
